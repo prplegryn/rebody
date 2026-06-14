@@ -1,0 +1,50 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.prplegryn.rebody"
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "com.prplegryn.rebody"
+        minSdk 23
+        targetSdk 37
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("keystore/rebody-ci.jks")
+            storePassword "rebody-ci-password"
+            keyAlias "rebody-ci"
+            keyPassword "rebody-ci-password"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.annotation:annotation:1.10.0"
+    implementation "androidx.annotation:annotation-experimental:1.6.0"
+    implementation "androidx.media3:media3-exoplayer:1.10.1"
+    implementation "androidx.media3:media3-ui:1.10.1"
+    implementation "androidx.media3:media3-effect:1.10.1"
+    implementation "androidx.media3:media3-transformer:1.10.1"
+}
