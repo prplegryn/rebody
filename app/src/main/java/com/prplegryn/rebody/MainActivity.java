@@ -10,6 +10,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
@@ -51,12 +52,14 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.ScrubbingModeParameters;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.transformer.Composition;
+import androidx.media3.transformer.DefaultEncoderFactory;
 import androidx.media3.transformer.EditedMediaItem;
 import androidx.media3.transformer.Effects;
 import androidx.media3.transformer.ExportException;
 import androidx.media3.transformer.ExportResult;
 import androidx.media3.transformer.ProgressHolder;
 import androidx.media3.transformer.Transformer;
+import androidx.media3.transformer.VideoEncoderSettings;
 import androidx.media3.ui.PlayerView;
 import java.io.File;
 import java.io.FileInputStream;
@@ -97,6 +100,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   private EditText dividerHeightInput;
   private TextView playButton;
   private TextView stepButton;
+  private TextView stretchValueText;
   private TextView exportButton;
   private TextView fileButton;
   private TextView outputDirButton;
@@ -110,6 +114,10 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   private Uri currentVideoUri;
   private Uri outputTreeUri;
   private float videoAspect = 9f / 16f;
+  private int inputVideoWidth = Format.NO_VALUE;
+  private int inputVideoHeight = Format.NO_VALUE;
+  private int inputVideoBitrate = Format.NO_VALUE;
+  private float inputVideoFrameRate = Format.NO_VALUE;
   private float dividerHeightDp = -1f;
   private float stretchScale = 1f;
   private int stepMode;
@@ -388,6 +396,29 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(dp(84), dp(34));
     inputParams.leftMargin = dp(8);
     row.addView(dividerHeightInput, inputParams);
+
+    Space gap = new Space(this);
+    row.addView(gap, new LinearLayout.LayoutParams(dp(18), 1));
+
+    TextView stretchLabel = new TextView(this);
+    stretchLabel.setText("伸缩");
+    stretchLabel.setTextSize(13);
+    stretchLabel.setTextColor(Color.rgb(62, 55, 45));
+    stretchLabel.setTypeface(interMediumTypeface);
+    row.addView(stretchLabel);
+
+    stretchValueText = new TextView(this);
+    stretchValueText.setGravity(Gravity.CENTER);
+    stretchValueText.setTextSize(14);
+    stretchValueText.setIncludeFontPadding(false);
+    stretchValueText.setTypeface(interMediumTypeface);
+    stretchValueText.setTextColor(Color.rgb(25, 28, 32));
+    stretchValueText.setBackground(inputBackground());
+    stretchValueText.setContentDescription("精确伸缩值");
+    LinearLayout.LayoutParams stretchValueParams = new LinearLayout.LayoutParams(dp(76), dp(34));
+    stretchValueParams.leftMargin = dp(8);
+    row.addView(stretchValueText, stretchValueParams);
+    updateStretchValueText();
     return row;
   }
 
@@ -456,12 +487,12 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     row.addView(right, new LinearLayout.LayoutParams(-2, -1));
 
     minusButton = makeButton("-", 48, "缩小下方区域");
-    bindRepeating(minusButton, () -> adjustStretch(-0.1f));
+    bindRepeating(minusButton, () -> adjustStretch(-0.01f), 36);
     right.addView(minusButton);
     right.addView(space(8));
 
     plusButton = makeButton("+", 48, "拉伸下方区域");
-    bindRepeating(plusButton, () -> adjustStretch(0.1f));
+    bindRepeating(plusButton, () -> adjustStretch(0.01f), 36);
     right.addView(plusButton);
 
     return row;
@@ -543,18 +574,28 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   }
 
   private void readVideoMetadata(Uri uri) {
+    inputVideoWidth = Format.NO_VALUE;
+    inputVideoHeight = Format.NO_VALUE;
+    inputVideoBitrate = Format.NO_VALUE;
+    inputVideoFrameRate = Format.NO_VALUE;
     MediaMetadataRetriever retriever = new MediaMetadataRetriever();
     try {
       retriever.setDataSource(this, uri);
       int width = parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH), 0);
       int height = parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT), 0);
       int rotation = parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION), 0);
+      inputVideoBitrate =
+          parseInt(
+              retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE),
+              Format.NO_VALUE);
       if ((rotation == 90 || rotation == 270) && width > 0 && height > 0) {
         int tmp = width;
         width = height;
         height = tmp;
       }
       if (width > 0 && height > 0) {
+        inputVideoWidth = width;
+        inputVideoHeight = height;
         videoAspect = width / (float) height;
       }
     } catch (RuntimeException ignored) {
@@ -576,9 +617,22 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
       for (int i = 0; i < extractor.getTrackCount(); i++) {
         MediaFormat format = extractor.getTrackFormat(i);
         String mime = format.getString(MediaFormat.KEY_MIME);
-        if (mime != null && mime.startsWith("video/") && format.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+        if (mime != null && mime.startsWith("video/")) {
+          if (inputVideoWidth == Format.NO_VALUE && format.containsKey(MediaFormat.KEY_WIDTH)) {
+            inputVideoWidth = format.getInteger(MediaFormat.KEY_WIDTH);
+          }
+          if (inputVideoHeight == Format.NO_VALUE && format.containsKey(MediaFormat.KEY_HEIGHT)) {
+            inputVideoHeight = format.getInteger(MediaFormat.KEY_HEIGHT);
+          }
+          if (format.containsKey(MediaFormat.KEY_BIT_RATE)) {
+            inputVideoBitrate = format.getInteger(MediaFormat.KEY_BIT_RATE);
+          }
+          if (!format.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+            return 33L;
+          }
           int frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE);
           if (frameRate > 0) {
+            inputVideoFrameRate = frameRate;
             return Math.max(1L, Math.round(1000f / frameRate));
           }
         }
@@ -600,6 +654,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
         if (group.isTrackSelected(i)) {
           Format format = group.getTrackFormat(i);
           if (format.frameRate > 0f && format.frameRate != Format.NO_VALUE) {
+            inputVideoFrameRate = format.frameRate;
             frameStepMs = Math.max(1L, Math.round(1000f / format.frameRate));
             return;
           }
@@ -634,6 +689,12 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     }
     pendingTextEditUpdate = false;
     dividerHeightInput.setText(String.format(Locale.US, "%.1f", dividerHeightDp));
+  }
+
+  private void updateStretchValueText() {
+    if (stretchValueText != null) {
+      stretchValueText.setText(String.format(Locale.US, "%.2fx", stretchScale));
+    }
   }
 
   private void applyDividerHeightInput() {
@@ -716,7 +777,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   }
 
   private void adjustStretch(float delta) {
-    setStretchScale(Math.round((stretchScale + delta) * 10f) / 10f, true);
+    setStretchScale(Math.round((stretchScale + delta) * 100f) / 100f, true);
   }
 
   private void setStretchFromSlider(float fraction) {
@@ -736,6 +797,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     stretchScale = Math.max(MIN_STRETCH, Math.min(MAX_STRETCH, value));
     prefs.edit().putFloat(KEY_STRETCH, stretchScale).apply();
     stageOverlay.setStretchScale(stretchScale);
+    updateStretchValueText();
     if (updateSlider && stretchSlider != null) {
       stretchSlider.setProgressFraction(stretchScaleToFraction(stretchScale));
     }
@@ -831,6 +893,17 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
 
     setExporting(true);
     setExportTextAnimated("0%");
+    int exportBitrate = estimateHighQualityExportBitrate();
+    VideoEncoderSettings videoEncoderSettings =
+        new VideoEncoderSettings.Builder()
+            .setBitrate(exportBitrate)
+            .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            .setiFrameIntervalSeconds(1f)
+            .build();
+    DefaultEncoderFactory encoderFactory =
+        new DefaultEncoderFactory.Builder(this)
+            .setRequestedVideoEncoderSettings(videoEncoderSettings)
+            .build();
     FixedParameters fixedParameters = new FixedParameters(getSplitTopRatio(), stretchScale);
     EditedMediaItem editedMediaItem =
         new EditedMediaItem.Builder(MediaItem.fromUri(currentVideoUri))
@@ -842,6 +915,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     transformer =
         new Transformer.Builder(this)
             .setVideoMimeType(MimeTypes.VIDEO_H264)
+            .setEncoderFactory(encoderFactory)
             .addListener(
                 new Transformer.Listener() {
                   @Override
@@ -865,6 +939,29 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     } catch (RuntimeException e) {
       finishExportWithError(e.getMessage());
     }
+  }
+
+  private int estimateHighQualityExportBitrate() {
+    int width = inputVideoWidth > 0 ? inputVideoWidth : 1080;
+    int height =
+        inputVideoHeight > 0
+            ? inputVideoHeight
+            : Math.max(2, Math.round(width / Math.max(0.2f, videoAspect)));
+    float frameRate =
+        inputVideoFrameRate > 0f
+            ? inputVideoFrameRate
+            : frameStepMs > 0L ? 1000f / frameStepMs : 30f;
+    float splitTop = getSplitTopRatio();
+    float outputHeightRatio = splitTop + (1f - splitTop) * stretchScale;
+    int outputHeight = Math.max(2, Math.round(height * outputHeightRatio));
+    long pixelRate = Math.round(width * (double) outputHeight * frameRate);
+
+    long sourceBasedBitrate =
+        inputVideoBitrate > 0 ? Math.round(inputVideoBitrate * 3.0d) : 0L;
+    long pixelBasedBitrate = Math.round(pixelRate * 0.35d);
+    long minimumBitrate = Math.max(2_500_000L, Math.round(pixelRate * 0.18d));
+    long targetBitrate = Math.max(Math.max(sourceBasedBitrate, pixelBasedBitrate), minimumBitrate);
+    return (int) Math.max(2_500_000L, Math.min(180_000_000L, targetBitrate));
   }
 
   private void copyCompletedExport() {
@@ -989,6 +1086,10 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   }
 
   private void bindRepeating(TextView button, Runnable action) {
+    bindRepeating(button, action, 86);
+  }
+
+  private void bindRepeating(TextView button, Runnable action, long repeatDelayMs) {
     int longPressDelay = Math.max(260, ViewConfiguration.getLongPressTimeout() - 120);
     Runnable[] repeat = new Runnable[1];
     boolean[] repeated = new boolean[1];
@@ -1001,7 +1102,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
             }
             repeated[0] = true;
             action.run();
-            mainHandler.postDelayed(this, 86);
+            mainHandler.postDelayed(this, repeatDelayMs);
           }
         };
     button.setOnTouchListener(
