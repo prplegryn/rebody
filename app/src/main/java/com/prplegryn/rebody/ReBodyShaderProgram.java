@@ -14,12 +14,18 @@ import java.io.IOException;
 final class ReBodyShaderProgram extends BaseGlShaderProgram {
   private final GlProgram glProgram;
   private final ReBodyVideoEffect.ParametersProvider parametersProvider;
+  private final boolean cropOutput;
+  private float configuredOutputHeightRatio = 1f;
 
   ReBodyShaderProgram(
-      Context context, boolean useHdr, ReBodyVideoEffect.ParametersProvider parametersProvider)
+      Context context,
+      boolean useHdr,
+      ReBodyVideoEffect.ParametersProvider parametersProvider,
+      boolean cropOutput)
       throws VideoFrameProcessingException {
     super(useHdr, 1);
     this.parametersProvider = parametersProvider;
+    this.cropOutput = cropOutput;
     try {
       glProgram =
           new GlProgram(
@@ -41,7 +47,18 @@ final class ReBodyShaderProgram extends BaseGlShaderProgram {
 
   @Override
   public Size configure(int inputWidth, int inputHeight) {
-    return new Size(inputWidth, inputHeight);
+    int outputHeight = inputHeight;
+    if (cropOutput) {
+      float splitTop = clamp(parametersProvider.getSplitTopRatio(), 0.02f, 0.98f);
+      float stretchScale = clamp(parametersProvider.getStretchScale(), 0.2f, 3f);
+      float outputRatio = splitTop + (1f - splitTop) * stretchScale;
+      outputHeight = Math.max(2, Math.round(inputHeight * outputRatio));
+      if (outputHeight % 2 != 0) {
+        outputHeight = Math.max(2, outputHeight - 1);
+      }
+    }
+    configuredOutputHeightRatio = outputHeight / (float) inputHeight;
+    return new Size(inputWidth, outputHeight);
   }
 
   @Override
@@ -52,6 +69,8 @@ final class ReBodyShaderProgram extends BaseGlShaderProgram {
       glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0);
       glProgram.setFloatUniform("uSplitTop", clamp(parametersProvider.getSplitTopRatio(), 0.02f, 0.98f));
       glProgram.setFloatUniform("uStretchScale", clamp(parametersProvider.getStretchScale(), 0.2f, 3f));
+      glProgram.setFloatUniform("uOutputHeightRatio", configuredOutputHeightRatio);
+      glProgram.setFloatsUniform("uBlankColor", new float[] {0.96f, 0.86f, 0.83f});
       glProgram.bindAttributesAndUniforms();
       GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     } catch (GlUtil.GlException e) {

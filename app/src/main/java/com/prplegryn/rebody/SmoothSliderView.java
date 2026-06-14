@@ -21,6 +21,7 @@ final class SmoothSliderView extends View {
   private final RectF rect = new RectF();
   private Listener listener;
   private float progressFraction;
+  private float neutralFraction = -1f;
   private boolean dragging;
 
   SmoothSliderView(Context context) {
@@ -38,6 +39,11 @@ final class SmoothSliderView extends View {
       return;
     }
     this.progressFraction = clamp(progressFraction, 0f, 1f);
+    invalidate();
+  }
+
+  void setNeutralFraction(float neutralFraction) {
+    this.neutralFraction = neutralFraction;
     invalidate();
   }
 
@@ -66,6 +72,13 @@ final class SmoothSliderView extends View {
     paint.setColor(Color.rgb(42, 111, 104));
     rect.set(left, centerY - radius, progressX, centerY + radius);
     canvas.drawRoundRect(rect, radius, radius, paint);
+
+    if (neutralFraction >= 0f) {
+      float markerX = left + (right - left) * clamp(neutralFraction, 0f, 1f);
+      paint.setColor(Color.rgb(96, 88, 76));
+      rect.set(markerX - dp(1), centerY - dp(11), markerX + dp(1), centerY + dp(11));
+      canvas.drawRoundRect(rect, dp(1), dp(1), paint);
+    }
 
     paint.setColor(Color.WHITE);
     canvas.drawCircle(progressX, centerY, knobRadius, paint);

@@ -4,14 +4,22 @@ precision mediump float;
 uniform sampler2D uTexSampler;
 uniform float uSplitTop;
 uniform float uStretchScale;
+uniform float uOutputHeightRatio;
+uniform vec3 uBlankColor;
 varying vec2 vTexSamplingCoord;
 
 void main() {
-  float screenYFromTop = 1.0 - vTexSamplingCoord.y;
-  float sourceYFromTop = screenYFromTop;
+  float outputYFromTop = (1.0 - vTexSamplingCoord.y) * uOutputHeightRatio;
+  float contentEnd = uSplitTop + (1.0 - uSplitTop) * uStretchScale;
+  if (outputYFromTop > contentEnd) {
+    gl_FragColor = vec4(uBlankColor, 1.0);
+    return;
+  }
 
-  if (screenYFromTop > uSplitTop) {
-    float lowerDistance = screenYFromTop - uSplitTop;
+  float sourceYFromTop = outputYFromTop;
+
+  if (outputYFromTop > uSplitTop) {
+    float lowerDistance = outputYFromTop - uSplitTop;
     sourceYFromTop = uSplitTop + lowerDistance / max(uStretchScale, 0.05);
   }
 

@@ -78,6 +78,9 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   private static final String KEY_OUTPUT_TREE = "output_tree";
   private static final String KEY_LINE_ALPHA = "line_alpha";
   private static final String[] STEP_LABELS = {"帧", "1s", "3s", "5s"};
+  private static final float MIN_STRETCH = 0.2f;
+  private static final float MAX_STRETCH = 3f;
+  private static final float NEUTRAL_STRETCH_FRACTION = 0.7f;
 
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
   private final ProgressHolder progressHolder = new ProgressHolder();
@@ -90,6 +93,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   private PlayerView playerView;
   private PlayerStageView stageOverlay;
   private SmoothSliderView progressSlider;
+  private SmoothSliderView stretchSlider;
   private EditText dividerHeightInput;
   private TextView playButton;
   private TextView stepButton;
@@ -113,6 +117,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   private boolean exporting;
   private boolean scrubbing;
   private boolean pendingTextEditUpdate;
+  private boolean previewRefreshQueued;
   private String exportText = "导出";
   private File pendingExportFile;
 
@@ -134,9 +139,8 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
 
   private final Runnable previewRefresh =
       () -> {
-        if (player != null && currentVideoUri != null && !player.isPlaying()) {
-          player.seekTo(player.getCurrentPosition());
-        }
+        previewRefreshQueued = false;
+        refreshPreviewFrame();
       };
 
   private final Runnable exportProgressUpdater =
@@ -231,6 +235,9 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
 
   private void configureWindow() {
     Window window = getWindow();
+    if (Build.VERSION.SDK_INT >= 30) {
+      window.setDecorFitsSystemWindows(true);
+    }
     window.setStatusBarColor(Color.rgb(249, 245, 234));
     window.setNavigationBarColor(Color.rgb(249, 245, 234));
     if (Build.VERSION.SDK_INT >= 23) {
@@ -244,14 +251,15 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     root.setGravity(Gravity.CENTER_HORIZONTAL);
     root.setBackgroundColor(Color.rgb(249, 245, 234));
     root.setPadding(dp(14), dp(10), dp(14), dp(12));
+    root.setFitsSystemWindows(true);
 
     stageArea = new FrameLayout(this);
-    stageArea.setBackgroundColor(Color.rgb(242, 234, 218));
-    LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(-1, 0, 7f);
+    stageArea.setBackgroundColor(Color.rgb(249, 245, 234));
+    LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(-1, 0, 1f);
     root.addView(stageArea, stageParams);
 
     playerShell = new RoundedFrameLayout(this, dp(18));
-    playerShell.setBackgroundColor(Color.rgb(17, 17, 17));
+    playerShell.setBackgroundColor(Color.rgb(246, 218, 212));
     FrameLayout.LayoutParams shellParams = new FrameLayout.LayoutParams(dp(220), dp(340), Gravity.CENTER);
     stageArea.addView(playerShell, shellParams);
 
@@ -293,8 +301,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     controls.setOrientation(LinearLayout.VERTICAL);
     controls.setGravity(Gravity.CENTER_HORIZONTAL);
     controls.setPadding(0, dp(8), 0, 0);
-    LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, 0, 3f);
-    root.addView(controls, controlsParams);
+    root.addView(controls, new LinearLayout.LayoutParams(-1, -2));
 
     controls.addView(buildDividerHeightRow(), new LinearLayout.LayoutParams(-1, dp(42)));
 
@@ -330,6 +337,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
 
     controls.addView(buildPlaybackRow(), new LinearLayout.LayoutParams(-1, dp(52)));
     controls.addView(buildFileExportRow(), new LinearLayout.LayoutParams(-1, dp(52)));
+    controls.addView(buildStretchSliderRow(), new LinearLayout.LayoutParams(-1, dp(44)));
 
     updateControlsEnabled();
     return root;
@@ -381,6 +389,31 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     inputParams.leftMargin = dp(8);
     row.addView(dividerHeightInput, inputParams);
     return row;
+  }
+
+  private SmoothSliderView buildStretchSliderRow() {
+    stretchSlider = new SmoothSliderView(this);
+    stretchSlider.setContentDescription("伸缩值");
+    stretchSlider.setNeutralFraction(NEUTRAL_STRETCH_FRACTION);
+    stretchSlider.setProgressFraction(stretchScaleToFraction(stretchScale));
+    stretchSlider.setListener(
+        new SmoothSliderView.Listener() {
+          @Override
+          public void onScrubStart(float fraction) {
+            setStretchFromSlider(fraction);
+          }
+
+          @Override
+          public void onScrubMove(float fraction) {
+            setStretchFromSlider(fraction);
+          }
+
+          @Override
+          public void onScrubEnd(float fraction) {
+            setStretchFromSlider(fraction);
+          }
+        });
+    return stretchSlider;
   }
 
   private LinearLayout buildPlaybackRow() {
@@ -683,15 +716,73 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
   }
 
   private void adjustStretch(float delta) {
-    stretchScale = Math.max(0.2f, Math.min(3f, Math.round((stretchScale + delta) * 10f) / 10f));
+    setStretchScale(Math.round((stretchScale + delta) * 10f) / 10f, true);
+  }
+
+  private void setStretchFromSlider(float fraction) {
+    float value;
+    if (fraction <= NEUTRAL_STRETCH_FRACTION) {
+      value = MIN_STRETCH + (fraction / NEUTRAL_STRETCH_FRACTION) * (1f - MIN_STRETCH);
+    } else {
+      value =
+          1f
+              + ((fraction - NEUTRAL_STRETCH_FRACTION) / (1f - NEUTRAL_STRETCH_FRACTION))
+                  * (MAX_STRETCH - 1f);
+    }
+    setStretchScale(Math.round(value * 100f) / 100f, false);
+  }
+
+  private void setStretchScale(float value, boolean updateSlider) {
+    stretchScale = Math.max(MIN_STRETCH, Math.min(MAX_STRETCH, value));
     prefs.edit().putFloat(KEY_STRETCH, stretchScale).apply();
     stageOverlay.setStretchScale(stretchScale);
+    if (updateSlider && stretchSlider != null) {
+      stretchSlider.setProgressFraction(stretchScaleToFraction(stretchScale));
+    }
     requestPreviewRefresh();
   }
 
+  private float stretchScaleToFraction(float value) {
+    float clamped = Math.max(MIN_STRETCH, Math.min(MAX_STRETCH, value));
+    if (clamped <= 1f) {
+      return ((clamped - MIN_STRETCH) / (1f - MIN_STRETCH)) * NEUTRAL_STRETCH_FRACTION;
+    }
+    return NEUTRAL_STRETCH_FRACTION
+        + ((clamped - 1f) / (MAX_STRETCH - 1f)) * (1f - NEUTRAL_STRETCH_FRACTION);
+  }
+
   private void requestPreviewRefresh() {
-    mainHandler.removeCallbacks(previewRefresh);
-    mainHandler.postDelayed(previewRefresh, 24);
+    if (previewRefreshQueued) {
+      return;
+    }
+    previewRefreshQueued = true;
+    mainHandler.postDelayed(previewRefresh, 16);
+  }
+
+  private void refreshPreviewFrame() {
+    if (player == null || currentVideoUri == null) {
+      return;
+    }
+    stageOverlay.invalidate();
+    playerView.invalidate();
+    if (player.isPlaying()) {
+      return;
+    }
+    long position = Math.max(0L, player.getCurrentPosition());
+    long duration = player.getDuration();
+    if (duration > 1 && duration != C.TIME_UNSET) {
+      long nudgedPosition = position < duration - 1 ? position + 1 : Math.max(0L, position - 1);
+      player.seekTo(nudgedPosition);
+      mainHandler.postDelayed(
+          () -> {
+            if (player != null && currentVideoUri != null && !player.isPlaying()) {
+              player.seekTo(position);
+            }
+          },
+          18);
+    } else {
+      player.seekTo(position);
+    }
   }
 
   private void openVideoPicker() {
@@ -746,7 +837,7 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
             .setEffects(
                 new Effects(
                     Collections.emptyList(),
-                    Collections.singletonList(new ReBodyVideoEffect(fixedParameters))))
+                    Collections.singletonList(new ReBodyVideoEffect(fixedParameters, true))))
             .build();
     transformer =
         new Transformer.Builder(this)
@@ -859,6 +950,9 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     boolean enabled = !exporting;
     if (progressSlider != null) {
       progressSlider.setEnabled(enabled && hasVideo);
+    }
+    if (stretchSlider != null) {
+      stretchSlider.setEnabled(enabled && hasVideo);
     }
     if (dividerHeightInput != null) {
       dividerHeightInput.setEnabled(enabled);
@@ -977,6 +1071,12 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
       return;
     }
     exportText = text;
+    if (text.endsWith("%")) {
+      exportButton.animate().cancel();
+      exportButton.setAlpha(1f);
+      exportButton.setText(text);
+      return;
+    }
     exportButton.animate().cancel();
     exportButton
         .animate()

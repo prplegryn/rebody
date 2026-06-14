@@ -6,6 +6,6 @@
     android:layout_height="match_parent"
     app:resize_mode="fit"
     app:show_buffering="never"
-    app:shutter_background_color="#111111"
+    app:shutter_background_color="#F6DAD4"
     app:surface_type="texture_view"
     app:use_controller="false" />

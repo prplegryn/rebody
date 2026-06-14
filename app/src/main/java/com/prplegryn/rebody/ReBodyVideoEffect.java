@@ -15,15 +15,21 @@ public final class ReBodyVideoEffect implements GlEffect {
   }
 
   private final ParametersProvider parametersProvider;
+  private final boolean cropOutput;
 
   public ReBodyVideoEffect(ParametersProvider parametersProvider) {
+    this(parametersProvider, false);
+  }
+
+  public ReBodyVideoEffect(ParametersProvider parametersProvider, boolean cropOutput) {
     this.parametersProvider = parametersProvider;
+    this.cropOutput = cropOutput;
   }
 
   @Override
   public GlShaderProgram toGlShaderProgram(Context context, boolean useHdr)
       throws VideoFrameProcessingException {
-    return new ReBodyShaderProgram(context, useHdr, parametersProvider);
+    return new ReBodyShaderProgram(context, useHdr, parametersProvider, cropOutput);
   }
 
   @Override
