@@ -527,7 +527,11 @@ public final class MainActivity extends Activity implements ReBodyVideoEffect.Pa
     } catch (RuntimeException ignored) {
       videoAspect = 9f / 16f;
     } finally {
-      retriever.release();
+      try {
+        retriever.release();
+      } catch (IOException ignored) {
+        // Metadata is already read; release failures are not actionable for this UI.
+      }
     }
     frameStepMs = readFrameStepMs(uri);
   }
